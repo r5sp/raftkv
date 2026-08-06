@@ -53,7 +53,7 @@ ignore = ["RUF012", "E501", "ASYNC109", "ASYNC110", "PT018"]
 python_version = "3.11"
 strict = true
 warn_unreachable = true
-files = ["raftkv", "tests"]
+files = ["raftkv", "tests", "scripts"]
 mypy_path = "tests"
 explicit_package_bases = true
 
