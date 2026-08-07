@@ -91,7 +91,7 @@ async def demo(data_dir: Path) -> None:
         procs[leader].wait()
         new_leader = await wait_for_leader(probe, exclude=leader)
         print(
-            f"    new leader: node {new_leader}, elected {1000 * (time.monotonic() - t0):.0f} ms after the kill"
+            f"    new leader: node {new_leader}, observed {1000 * (time.monotonic() - t0):.0f} ms after the kill"
         )
         print_table(await statuses(probe), ids)
 
