@@ -19,6 +19,8 @@ def test_single_node_elects_itself_and_commits() -> None:
     assert c["s1"].role is Role.LEADER
     idx = c.propose("s1", "v")
     assert idx == 2  # 1 is the leader's no-op
+    assert c["s1"].commit_index == 1  # not durable yet: group commit on flush
+    c["s1"].flush()
     assert c["s1"].commit_index == 2
 
 

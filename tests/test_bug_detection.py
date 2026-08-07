@@ -92,7 +92,8 @@ def test_counting_old_term_replicas_fails_figure8(monkeypatch: pytest.MonkeyPatc
     """Committing a previous-term entry by counting replicas (the Figure 8 bug)."""
 
     def buggy_commit(self: RaftCore) -> None:
-        matches = sorted([self.log.last_index, *self.match_index.values()], reverse=True)
+        durable = self.log.last_index - len(self._unpersisted)
+        matches = sorted([durable, *self.match_index.values()], reverse=True)
         n = matches[self.quorum - 1]
         if n > self.commit_index:
             self._advance_commit(n)

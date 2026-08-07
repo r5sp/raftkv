@@ -275,3 +275,39 @@ def test_figure8_current_term_entry_commits_both_and_blocks_s5() -> None:
     assert leader.id in ("s2", "s3")
     assert leader.log.term_at(2) == 2
     assert leader.log.term_at(3) == 4
+
+
+def test_burst_of_proposals_is_group_committed() -> None:
+    """Proposals in one batch share one leader fsync; nothing counts until durable."""
+    c = ManualCluster(3)
+    leader = c.elect("s1")
+    store = c.storages["s1"]
+    writes = store.writes
+    for i in range(10):
+        c.propose("s1", f"v{i}")
+    assert store.writes == writes  # nothing written yet...
+    assert len(store.load().entries) == 1  # ...only the no-op is on disk
+    leader.flush()
+    assert store.writes == writes + 1  # one append for all ten
+    assert len(store.load().entries) == 11
+    c.deliver()
+    assert leader.commit_index == 11
+
+
+def test_leader_does_not_count_its_unpersisted_entries() -> None:
+    """Leaders may replicate before their own fsync, but only count themselves after it."""
+    c = ManualCluster(5)
+    leader = c.elect("s1")
+    idx = c.propose("s1", "w")
+    assert idx is not None
+    leader._send_append("s2", force=True)
+    leader._send_append("s3", force=True)
+    for dest, msg in leader.drain_outbox():
+        c[dest].step("s1", msg, 0.0)
+        for _, reply in c[dest].drain_outbox():
+            leader.step(dest, reply, 0.0)
+    # s2 and s3 store it durably, but the leader has not fsync'd: 2 of 5.
+    assert leader.match_index["s2"] == leader.match_index["s3"] == idx
+    assert leader.commit_index < idx
+    leader.flush()
+    assert leader.commit_index == idx

@@ -142,6 +142,7 @@ class RaftCore:
         self._need_heartbeat = False
         self._pending_reads: list[_PendingRead] = []
         self._reads_awaiting_noop: list[object] = []
+        self._unpersisted: list[Entry] = []  # proposals awaiting the next flush
 
         # Outputs drained by the runtime.
         self.outbox: list[tuple[NodeId, Message]] = []
@@ -204,17 +205,17 @@ class RaftCore:
     def propose(self, command: Command) -> int | None:
         """Append a client command to the leader's log; returns its index.
 
-        Returns ``None`` if this node is not the leader. The entry is sent to
-        followers on the next ``flush`` so that a burst of proposals shares one
-        AppendEntries round.
+        Returns ``None`` if this node is not the leader. The entry is made
+        durable and sent to followers on the next ``flush``, so a burst of
+        proposals shares one fsync and one AppendEntries round (group commit).
+        Until then the leader does not count itself as storing the entry.
         """
         if self.role is not Role.LEADER:
             return None
         entry = Entry(self.current_term, self.log.last_index + 1, command)
-        self._append([entry])
+        self.log.append([entry])
+        self._unpersisted.append(entry)
         self._dirty = True
-        if self.cluster_size == 1:
-            self._advance_commit(entry.index)
         return entry.index
 
     def request_read(self, ctx: object) -> bool:
@@ -238,7 +239,11 @@ class RaftCore:
         return True
 
     def flush(self) -> None:
-        """Send any AppendEntries made necessary by proposals or reads."""
+        """Persist pending proposals, then send any AppendEntries they or reads need."""
+        if self._unpersisted:
+            self._write_unpersisted()
+            if self.role is Role.LEADER:
+                self._maybe_commit()
         if self.role is Role.LEADER and (self._dirty or self._need_heartbeat):
             self._broadcast_append(heartbeat=self._need_heartbeat)
 
@@ -269,6 +274,7 @@ class RaftCore:
         data = self.sm.snapshot()
         keep = self.log.slice(index + 1, self.log.last_index + 1)
         self.storage.save_snapshot(index, term, data, keep)
+        self._unpersisted.clear()  # ``keep`` included them; they are on disk now
         self.log.compact(index, term)
         self.snapshot_data = data
         self.stats["snapshots_taken"] += 1
@@ -279,6 +285,9 @@ class RaftCore:
 
     def _become_follower(self, term: int, leader: NodeId | None) -> None:
         was_leader = self.role is Role.LEADER
+        if self._unpersisted:
+            # Keep the on-disk log contiguous before following a new leader.
+            self._write_unpersisted()
         if term > self.current_term:
             self.current_term = term
             self.voted_for = None
@@ -532,8 +541,10 @@ class RaftCore:
         self._check_reads()
 
     def _maybe_commit(self) -> None:
-        # The highest index replicated on a quorum (leader counts itself).
-        matches = sorted([self.log.last_index, *self.match_index.values()], reverse=True)
+        # The highest index durably stored on a quorum; the leader counts its own
+        # log only up to what has been fsync'd (see propose/flush).
+        durable = self.log.last_index - len(self._unpersisted)
+        matches = sorted([durable, *self.match_index.values()], reverse=True)
         n = matches[self.quorum - 1]
         # Section 5.4.2 / Figure 8: only entries from the current term are
         # committed by counting replicas; earlier ones commit indirectly.
@@ -592,6 +603,10 @@ class RaftCore:
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
+
+    def _write_unpersisted(self) -> None:
+        self.storage.append(self._unpersisted)
+        self._unpersisted = []
 
     def _append(self, entries: list[Entry]) -> None:
         if not entries:
