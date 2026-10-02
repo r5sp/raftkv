@@ -43,9 +43,12 @@ class _VirtualSelector(selectors.BaseSelector):
         return self._real.modify(fileobj, events, data)
 
     def select(self, timeout: float | None = None) -> list[tuple[selectors.SelectorKey, int]]:
-        ready = self._real.select(0)
-        if ready or timeout == 0:
-            return ready
+        # The simulation performs no real I/O, so the real selector is only
+        # consulted when the loop would otherwise deadlock (it still owns the
+        # loop's self-pipe, used by call_soon_threadsafe). Skipping the
+        # per-iteration kqueue/epoll syscall roughly halves wall time.
+        if timeout == 0:
+            return []
         if timeout is None:
             # Nothing scheduled at all. Give real I/O (e.g. the loop's
             # self-pipe) a brief chance, then declare deadlock.
