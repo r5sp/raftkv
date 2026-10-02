@@ -60,6 +60,8 @@ class Storage(Protocol):
         """Durably replace the snapshot; afterwards the log is exactly ``keep``."""
         ...
 
+    def close(self) -> None: ...
+
 
 class MemoryStorage:
     """Storage that lives in memory; survives simulated crashes by design."""
@@ -93,6 +95,9 @@ class MemoryStorage:
         s.snapshot_index, s.snapshot_term, s.snapshot_data = index, term, data
         s.entries = list(keep)
         self.writes += 1
+
+    def close(self) -> None:
+        pass
 
 
 _REC_HEADER = struct.Struct(">II")  # payload length, crc32(payload)
